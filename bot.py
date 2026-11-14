@@ -1,32 +1,28 @@
-import os
-import requests
 import telebot
+import requests
 
-# 1. Membaca kunci rahasia dari Environment Variables
-BOT_TOKEN = os.getenv("TELEGRAM_TOKEN")
-DEPLOY_HOOK_URL = os.getenv("DEPLOY_HOOK_URL")
-MY_CHAT_ID = os.getenv("CHAT_ID")
-
-if MY_CHAT_ID:
-    MY_CHAT_ID = int(MY_CHAT_ID)
+# === ISI DATA ANDA DI SINI ===
+BOT_TOKEN = "9092884532:AAH6mydCZRVTCV6dOvmn7SKFeEeu8sB9gFs"
+MY_CHAT_ID = 8799731886
+DEPLOY_HOOK_URL = "PASTE_URL_DEPLOY_HOOK_VERCEL_DI_SINI" 
+# =============================
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    bot.reply_to(message, "Halo! Ketik /deploy untuk merilis website Anda ke Vercel.")
+    bot.reply_to(message, "Halo! Bot siap. Ketik /deploy untuk merilis website Anda.")
 
 @bot.message_handler(commands=['deploy'])
 def deploy(message):
-    # Cek keamanan: Hanya pemilik bot yang bisa deploy
-    if str(message.chat.id) != str(MY_CHAT_ID):
-        bot.reply_to(message, "Akses ditolak. Anda bukan pemilik bot.")
+    if message.chat.id != MY_CHAT_ID:
+        bot.reply_to(message, "Akses ditolak.")
         return
 
     bot.reply_to(message, "⏳ Memicu deploy ke Vercel...")
 
     try:
-        # Memanggil URL Deploy Hook dari Vercel
+        # Menembak URL Deploy Hook
         response = requests.post(DEPLOY_HOOK_URL)
         
         if response.status_code in [200, 201]:
