@@ -1,11 +1,11 @@
 import telebot
 import requests
 
-# === ISI DATA ANDA DI SINI ===
 BOT_TOKEN = "9092884532:AAH6mydCZRVTCV6dOvmn7SKFeEeu8sB9gFs"
 MY_CHAT_ID = 8799731886
-DEPLOY_HOOK_URL = "PASTE_URL_DEPLOY_HOOK_VERCEL_DI_SINI" 
-# =============================
+
+# URL DEPLOY HOOK DARI VERCEL SUDAH DIMASUKKAN
+DEPLOY_HOOK_URL = "https://api.vercel.com/v1/integrations/deploy/prj_ReZqQqZmLQ1jcJrRht5gMHfoFMvX/itkf7vR8Rl"
 
 bot = telebot.TeleBot(BOT_TOKEN)
 
@@ -16,7 +16,6 @@ def send_welcome(message):
 @bot.message_handler(commands=['deploy'])
 def deploy(message):
     if message.chat.id != MY_CHAT_ID:
-        bot.reply_to(message, "Akses ditolak.")
         return
 
     bot.reply_to(message, "⏳ Memicu deploy ke Vercel...")
