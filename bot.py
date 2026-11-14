@@ -1,113 +1,194 @@
-import os
-import telebot
+import import telebot
 import requests
 import time
 import threading
+import json
+import os
+import zipfile
+import io
+import base64
 from telebot.types import ReplyKeyboardMarkup, KeyboardButton
 
 BOT_TOKEN = "9092884532:AAH6mydCZRVTCV6dOvmn7SKFeEeu8sB9gFs"
 MY_CHAT_ID = 8799731886
-
-# Token dibaca dari Railway (aman!)
-VERCEL_TOKEN = os.getenv("VERCEL_TOKEN")
-PROJECT_ID = "prj_ReZqQqZmLQ1jcJrRht5gMHfoFMvX"
+FILE_DB = "akun.json"
 
 bot = telebot.TeleBot(BOT_TOKEN)
-last_deploy_id = None
+user_state = {} 
+user_file_content = None
+user_file_type = None
+user_slots = 1
 
-# === FUNGSI NOTIFIKASI STATUS ===
-def pantau_status(chat_id, deploy_id):
-    headers = {"Authorization": f"Bearer {VERCEL_TOKEN}"}
-    url = f"https://api.vercel.com/v13/deployments/{deploy_id}"
-    
-    for _ in range(30): 
-        time.sleep(5)
+# === FUNGSI DATABASE (OTOMATIS DIBUAT) ===
+def load_db():
+    if not os.path.exists(FILE_DB):
+        with open(FILE_DB, 'w') as f:
+            json.dump({}, f) # Otomatis buat file kosong jika belum ada
+        return {}
+    with open(FILE_DB, 'r') as f:
+        return json.load(f)
+
+def save_db(data):
+    with open(FILE_DB, 'w') as f: json.dump(data, f, indent=4)
+
+# === FUNGSI BIKIN PROJECT BARU DI VERCEL ===
+def buat_project_baru(chat_id, file_content, file_type, index):
+    db = load_db()
+    if not db:
+        bot.send_message(chat_id, "❌ Anda belum punya akun. Tambah akun dulu.")
+        return False
+
+    akun_key = list(db.keys())[0]
+    token = db[akun_key]['token']
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    nama_project = f"api-{int(time.time())}-{index}"
+
+    res_project = requests.post("https://api.vercel.com/v9/projects", headers=headers, json={"name": nama_project, "framework": "other"})
+    if res_project.status_code not in [200, 201, 409]:
+        bot.send_message(chat_id, f"❌ Gagal buat project ke-{index}. Token Vercel mungkin tidak valid.")
+        return False
+
+    files = []
+    if file_type == 'html':
+        files.append({"file": "index.html", "data": file_content})
+    elif file_type == 'zip':
         try:
-            res = requests.get(url, headers=headers).json()
-            state = res.get("readyState")
-            if state == "READY":
-                bot.send_message(chat_id, "✅ **BUILD SUKSES!**\nWebsite sudah online. Cek Vercel Anda.")
-                return
-            elif state in ["ERROR", "CANCELED"]:
-                bot.send_message(chat_id, "❌ **BUILD GAGAL!**\nSilakan cek log di Vercel.")
-                return
-        except:
-            pass
-    bot.send_message(chat_id, "⏱️ Build masih berjalan. Cek manual di Vercel.")
+            with zipfile.ZipFile(io.BytesIO(file_content)) as z:
+                for filename in z.namelist():
+                    if not z.is_dir(filename):
+                        raw_data = z.read(filename)
+                        try:
+                            text_data = raw_data.decode('utf-8')
+                        except:
+                            text_data = base64.b64encode(raw_data).decode('utf-8')
+                        files.append({"file": filename, "data": text_data})
+        except Exception as e:
+            bot.send_message(chat_id, f"❌ Gagal membaca file ZIP: {str(e)}")
+            return False
+
+    data_deploy = {
+        "name": nama_project,
+        "files": files,
+        "projectSettings": {"framework": None}
+    }
+    res_deploy = requests.post("https://api.vercel.com/v13/deployments", headers=headers, json=data_deploy)
+    
+    if res_deploy.status_code in [200, 201]:
+        bot.send_message(chat_id, f"✅ API ke-{index} Sukses: https://{nama_project}.vercel.app")
+        return True
+    else:
+        bot.send_message(chat_id, f"❌ API ke-{index} Gagal di-deploy.")
+        return False
 
 # === MENU UTAMA ===
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
     if message.chat.id != MY_CHAT_ID: return
     markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    btn_deploy = KeyboardButton('🚀 Deploy')
-    btn_status = KeyboardButton('📊 Status')
-    btn_list = KeyboardButton('📁 List Project')
-    markup.add(btn_deploy, btn_status, btn_list)
+    markup.add(KeyboardButton('📁 Kirim File (HTML/ZIP)'), KeyboardButton('🔢 Set Slot (Maks 100)'))
+    markup.add(KeyboardButton('📁 Daftar Akun'), KeyboardButton('➕ Tambah Akun'))
+    markup.add(KeyboardButton('🚀 Jalankan Deploy Massal'))
     
-    bot.send_message(message.chat.id, "🤖 **Bot Deployer Pro**\nSilakan pilih menu:", reply_markup=markup)
+    bot.send_message(message.chat.id, "🤖 **Bot Builder API Massal**\n1. Tambah Akun\n2. Set Slot\n3. Kirim File\n4. Jalankan Deploy", reply_markup=markup)
 
-# === FITUR DEPLOY ===
-@bot.message_handler(commands=['deploy'])
-@bot.message_handler(func=lambda message: message.text == '🚀 Deploy')
-def deploy(message):
-    global last_deploy_id
-    if message.chat.id != MY_CHAT_ID: return
+# === FITUR TAMBAH AKUN ===
+@bot.message_handler(func=lambda message: message.text == '➕ Tambah Akun')
+def tambah_akun_start(message):
+    bot.reply_to(message, "Masukkan **Nama Akun**:")
+    bot.register_next_step_handler(message, proses_tambah_nama)
 
-    bot.reply_to(message, "⏳ Memulai deploy ke Vercel...")
-    headers = {"Authorization": f"Bearer {VERCEL_TOKEN}", "Content-Type": "application/json"}
-    data = {"name": "bot-deploy-vercel", "project": PROJECT_ID, "target": "production"}
+def proses_tambah_nama(message):
+    user_state[message.chat.id] = {'nama': message.text}
+    bot.reply_to(message, "Masukkan **Token Vercel** (vcp_...):")
+    bot.register_next_step_handler(message, proses_tambah_token)
 
-    try:
-        response = requests.post("https://api.vercel.com/v13/deployments", headers=headers, json=data)
-        if response.status_code in [200, 201]:
-            res_data = response.json()
-            last_deploy_id = res_data.get("id")
-            bot.reply_to(message, "🚀 **Deploy dipicu!**\nMemantau status...")
-            threading.Thread(target=pantau_status, args=(message.chat.id, last_deploy_id)).start()
-        else:
-            bot.reply_to(message, f"❌ Gagal: {response.text}")
-    except Exception as e:
-        bot.reply_to(message, f"⚠️ Error: {str(e)}")
-
-# === FITUR CEK STATUS ===
-@bot.message_handler(commands=['status'])
-@bot.message_handler(func=lambda message: message.text == '📊 Status')
-def cek_status(message):
-    if message.chat.id != MY_CHAT_ID: return
-    if not last_deploy_id:
-        bot.reply_to(message, "Belum ada deploy yang dilakukan.")
+def proses_tambah_token(message):
+    token_input = message.text.strip()
+    if not token_input or len(token_input) < 10:
+        bot.reply_to(message, "❌ Token kosong atau tidak valid. Silakan ulangi.")
         return
 
-    bot.reply_to(message, "🔍 Mengecek status...")
-    headers = {"Authorization": f"Bearer {VERCEL_TOKEN}"}
-    try:
-        res = requests.get(f"https://api.vercel.com/v13/deployments/{last_deploy_id}", headers=headers).json()
-        state = res.get("readyState", "UNKNOWN")
-        url = res.get("url", "Tidak ada URL")
-        bot.reply_to(message, f"📊 **Status:** `{state}`\n🔗 **URL:** https://{url}")
-    except Exception as e:
-        bot.reply_to(message, f"⚠️ Error: {str(e)}")
+    data = user_state[message.chat.id]
+    db = load_db()
+    key = f"akun_{int(time.time())}" 
+    db[key] = {"nama": data['nama'], "token": token_input, "status": "Aktif"}
+    save_db(db)
+    bot.reply_to(message, f"✅ Akun **{data['nama']}** berhasil disimpan!")
+    del user_state[message.chat.id]
 
-# === FITUR LIST PROJECT ===
-@bot.message_handler(commands=['list'])
-@bot.message_handler(func=lambda message: message.text == '📁 List Project')
-def list_project(message):
+# === FITUR DAFTAR AKUN ===
+@bot.message_handler(func=lambda message: message.text == '📁 Daftar Akun')
+def daftar_akun(message):
+    db = load_db()
+    if not db: return bot.reply_to(message, "Belum ada akun.")
+    pesan = "📁 **Akun Anda:**\n"
+    for val in db.values():
+        pesan += f"▪️ {val['nama']} ({val['status']})\n"
+    bot.reply_to(message, pesan)
+
+# === FITUR SET SLOT ===
+@bot.message_handler(func=lambda message: message.text == '🔢 Set Slot (Maks 100)')
+def set_slot(message):
+    bot.reply_to(message, "Masukkan jumlah API/Website yang ingin dibuat (1-100):")
+    bot.register_next_step_handler(message, proses_set_slot)
+
+def proses_set_slot(message):
+    global user_slots
+    try:
+        jumlah = int(message.text)
+        if 1 <= jumlah <= 100:
+            user_slots = jumlah
+            bot.reply_to(message, f"✅ Slot diatur: **{user_slots}** API akan dibuat.")
+        else:
+            bot.reply_to(message, "❌ Harap masukkan angka antara 1 sampai 100.")
+    except:
+        bot.reply_to(message, "❌ Masukkan angka saja.")
+
+# === FITUR TERIMA FILE (HTML/ZIP) ===
+@bot.message_handler(content_types=['document'])
+def terima_file(message):
+    global user_file_content, user_file_type
     if message.chat.id != MY_CHAT_ID: return
-    bot.reply_to(message, "🔍 Mengambil daftar project...")
-    headers = {"Authorization": f"Bearer {VERCEL_TOKEN}"}
     
-    try:
-        res = requests.get("https://api.vercel.com/v9/projects", headers=headers).json()
-        projects = res.get("projects", [])[:3]
-        if not projects: return bot.reply_to(message, "Tidak ada project.")
-        
-        pesan = "📁 **Daftar Project:**\n\n"
-        for p in projects:
-            pesan += f"▪️ **{p.get('name')}**\n   Status: `{p.get('latestDeployments', [{}])[0].get('readyState', 'N/A')}`\n\n"
-        bot.reply_to(message, pesan)
-    except Exception as e:
-        bot.reply_to(message, f"⚠️ Error: {str(e)}")
+    file_name = message.document.file_name
+    if file_name.endswith('.html'):
+        user_file_type = 'html'
+    elif file_name.endswith('.zip'):
+        user_file_type = 'zip'
+    else:
+        bot.reply_to(message, "❌ Harap kirim file dengan format .html atau .zip")
+        return
 
-print("Bot Pro berjalan...")
+    file_info = bot.get_file(message.document.file_id)
+    downloaded_file = bot.download_file(file_info.file_path)
+    
+    if user_file_type == 'html':
+        user_file_content = downloaded_file.decode('utf-8')
+    else:
+        user_file_content = downloaded_file
+
+    bot.reply_to(message, f"✅ File **{file_name}** diterima!\nSekarang klik **🚀 Jalankan Deploy Massal**.")
+
+# === FITUR JALANKAN DEPLOY MASSAL ===
+@bot.message_handler(func=lambda message: message.text == '🚀 Jalankan Deploy Massal')
+def jalankan_deploy(message):
+    global user_file_content, user_file_type, user_slots
+    if message.chat.id != MY_CHAT_ID: return
+    if not user_file_content:
+        bot.reply_to(message, "❌ Kirim file HTML/ZIP dulu!")
+        return
+    
+    bot.reply_to(message, f"⏳ Memproses pembuatan **{user_slots}** API secara massal. Mohon tunggu...")
+    
+    def proses_massal():
+        sukses = 0
+        for i in range(1, user_slots + 1):
+            if buat_project_baru(message.chat.id, user_file_content, user_file_type, i):
+                sukses += 1
+            time.sleep(2)
+        bot.send_message(message.chat.id, f"🏁 **Selesai!** Berhasil membuat {sukses} dari {user_slots} API.")
+    
+    threading.Thread(target=proses_massal).start()
+
+print("Bot Builder Massal berjalan...")
 bot.infinity_polling()
